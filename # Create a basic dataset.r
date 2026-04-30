@@ -1,5 +1,6 @@
 # Create a dataset from the database query result
 source("db_connect.r")
+result <- get_plot_data()
 
 required_columns <- c("date", "zhvi")
 missing_columns <- setdiff(required_columns, names(result))
