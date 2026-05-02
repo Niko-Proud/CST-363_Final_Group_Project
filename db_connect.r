@@ -5,7 +5,7 @@ get_plot_data <- function() {
   # Connect to PostgreSQL
   con <- dbConnect(
     RPostgres::Postgres(),
-    dbname = "final_project_housing_analysis",
+    dbname = "housing_analysis",
     host = "localhost",
     port = 5431,
     user = "postgres",
