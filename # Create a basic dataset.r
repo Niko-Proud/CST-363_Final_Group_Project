@@ -1,29 +1,4 @@
 # Create a dataset from the database query result
-get_script_directory <- function() {
-  source_file <- NULL
-
-  for (frame in sys.frames()) {
-    if (!is.null(frame$ofile)) {
-      source_file <- frame$ofile
-      break
-    }
-  }
-
-  if ((is.null(source_file) || !nzchar(source_file)) &&
-      requireNamespace("rstudioapi", quietly = TRUE) &&
-      rstudioapi::isAvailable()) {
-    source_file <- rstudioapi::getActiveDocumentContext()$path
-  }
-
-  if (!is.null(source_file) && nzchar(source_file)) {
-    return(dirname(normalizePath(source_file, winslash = "/", mustWork = TRUE)))
-  }
-
-  getwd()
-}
-
-script_dir <- get_script_directory()
-source(file.path(script_dir, "db_connect.r"), chdir = TRUE)
 source("db_connect.r")
 result <- get_plot_data()
 
@@ -68,16 +43,14 @@ plot_average_zhvi <- function(plot_data) {
          cex = 0.6)
 }
 
-# Show the plot in RStudio/interactive R when a plotting device is available.
-if (interactive() ||
-    (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())) {
+# Show the plot in RStudio/interactive R.
+if (interactive()) {
   plot_average_zhvi(average_data)
 }
 
 # Save the plot so it is visible even when the script is run non-interactively.
-plot_file <- file.path(script_dir, "average_housing_price_over_time.png")
-png(plot_file, width = 1000, height = 650, res = 120)
+png("average_housing_price_over_time.png", width = 1000, height = 650, res = 120)
 plot_average_zhvi(average_data)
 invisible(dev.off())
 
-message("Plot saved to ", plot_file)
+message("Plot saved to average_housing_price_over_time.png")
