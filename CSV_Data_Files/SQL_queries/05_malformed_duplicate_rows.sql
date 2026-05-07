@@ -1,4 +1,5 @@
 -- Intentionally malformed schema variation 1: duplicate rows.
+-- Run this script while connected to final_project_housing_analysis.
 --
 -- Purpose:
 --   This version keeps a mostly reasonable table structure, but removes the

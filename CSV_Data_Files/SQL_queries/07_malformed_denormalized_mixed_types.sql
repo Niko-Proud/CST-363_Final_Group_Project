@@ -1,4 +1,5 @@
 -- Intentionally malformed schema variation 3: heavily malformed.
+-- Run this script while connected to final_project_housing_analysis.
 --
 -- Purpose:
 --   This version is denormalized, mixes datatypes, repeats facts, stores

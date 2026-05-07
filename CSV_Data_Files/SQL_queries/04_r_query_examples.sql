@@ -1,4 +1,5 @@
 -- R-friendly PostgreSQL queries.
+-- Run this script while connected to final_project_housing_analysis.
 -- Run this file after 03_normalize_staged_income_data.sql.
 --
 -- Correct result in R:

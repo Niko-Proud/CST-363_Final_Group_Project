@@ -1,4 +1,5 @@
 -- PostgreSQL schema for the income CSV files.
+-- Run this script while connected to final_project_housing_analysis.
 -- Run this script before loading CSV data.
 --
 -- Correct result:

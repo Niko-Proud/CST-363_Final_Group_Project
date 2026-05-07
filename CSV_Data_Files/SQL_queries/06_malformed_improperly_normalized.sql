@@ -1,4 +1,5 @@
 -- Intentionally malformed schema variation 2: improperly normalized.
+-- Run this script while connected to final_project_housing_analysis.
 --
 -- Purpose:
 --   This version uses tables, but repeats descriptive series metadata on every

@@ -1,4 +1,5 @@
 -- Step 02: create empty staging tables.
+-- Run this script while connected to final_project_housing_analysis.
 -- Run this file top-to-bottom before importing the CSV files.
 --
 -- Correct result:

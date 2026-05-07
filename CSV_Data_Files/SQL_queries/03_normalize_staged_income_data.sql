@@ -1,4 +1,5 @@
 -- Step 03: move imported staging rows into the normalized income schema.
+-- Run this script while connected to final_project_housing_analysis.
 -- Run this file top-to-bottom after importing the five CSV files into
 -- income_stage.
 --
