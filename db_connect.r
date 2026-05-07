@@ -4,7 +4,7 @@ library(RPostgres)
 get_db_connection <- function() {
   dbConnect(
     RPostgres::Postgres(),
-    dbname = "housing_analysis",
+    dbname = "final_project_housing_analysis",
     host = "localhost",
     port = 5431,
     user = "postgres",
