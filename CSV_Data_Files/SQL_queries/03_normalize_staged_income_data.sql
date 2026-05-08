@@ -23,23 +23,23 @@ BEGIN
   SELECT COUNT(*) INTO rpi_count FROM income_stage.rpi;
 
   IF dspi_count = 0 THEN
-    RAISE EXCEPTION 'income_stage.dspi is empty. Import DSPI.csv before running this file.';
+    RAISE EXCEPTION 'income_stage.dspi is empty. Run 02_create_and_populate_staging_tables.sql before this file.';
   END IF;
 
   IF fodsp_count = 0 THEN
-    RAISE EXCEPTION 'income_stage.fodsp is empty. Import FODSP.csv before running this file.';
+    RAISE EXCEPTION 'income_stage.fodsp is empty. Run 02_create_and_populate_staging_tables.sql before this file.';
   END IF;
 
   IF mehoinusa646n_count = 0 THEN
-    RAISE EXCEPTION 'income_stage.mehoinusa646n is empty. Import MEHOINUSA646N.csv before running this file.';
+    RAISE EXCEPTION 'income_stage.mehoinusa646n is empty. Run 02_create_and_populate_staging_tables.sql before this file.';
   END IF;
 
   IF pi_count = 0 THEN
-    RAISE EXCEPTION 'income_stage.pi is empty. Import PI.csv before running this file.';
+    RAISE EXCEPTION 'income_stage.pi is empty. Run 02_create_and_populate_staging_tables.sql before this file.';
   END IF;
 
   IF rpi_count = 0 THEN
-    RAISE EXCEPTION 'income_stage.rpi is empty. Import RPI.csv before running this file.';
+    RAISE EXCEPTION 'income_stage.rpi is empty. Run 02_create_and_populate_staging_tables.sql before this file.';
   END IF;
 END
 $$;
