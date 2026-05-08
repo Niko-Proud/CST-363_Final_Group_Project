@@ -1,6 +1,7 @@
 library(shiny)
 library(ggplot2)
 source("db_connect.r")
+source("income_query.r")
 
 state_choices <- get_state_choices()
 date_limits <- get_date_limits()
@@ -78,7 +79,7 @@ server <- function(input, output) {
     req(input$dateRange)
     selected_dates <- as.Date(input$dateRange, origin = "1970-01-01")
 
-    get_state_housing_data(
+    get_state_income_comparison_data(
       states = input$datasets,
       start_date = selected_dates[1],
       end_date = selected_dates[2]
@@ -89,14 +90,14 @@ server <- function(input, output) {
     plot_data <- filtered_data()
     validate(need(nrow(plot_data) > 0, "No housing data found for the selected filters."))
 
-    ggplot(plot_data, aes(x = date, y = value, color = dataset)) +
+    ggplot(plot_data, aes(x = date, y = value, color = dataset, group = dataset)) +
       geom_line() +
       geom_point() +
       scale_y_continuous(labels = money_labels) +
-      labs(title = "Housing Values Over Time",
+      labs(title = "Housing Values and Income Over Time",
            x = "Date",
-           y = "Housing Value",
-           color = "State") +
+           y = "Dollar Value",
+           color = "Series") +
       theme_minimal(base_size = 13) +
       theme(
         axis.text.y = element_text(size = 11),
