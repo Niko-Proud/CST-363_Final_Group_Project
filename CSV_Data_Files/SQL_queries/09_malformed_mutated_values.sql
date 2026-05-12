@@ -141,29 +141,30 @@ FROM selected_mutations
 WHERE target.observation_id = selected_mutations.observation_id;
 
 -- Specific break:
---   Push several arbitrary rows up or down by one or two orders of magnitude.
---   Each row below is a one-off mistake, not part of a recurring pattern.
+--   Push several arbitrary rows up or down by large but capped amounts.
+--   These are intentionally bigger than the 5-15 percent mutations above, but
+--   they stay within a range that will not flatten the rest of the plot.
 -- Display impact:
---   These selected values become obvious spikes or collapses and strongly
---   distort regression and prediction models. mutation_type only targets rows
---   that have not already been changed by the percentage updates above.
+--   These selected values become visible local spikes or dips without forcing
+--   the full chart into horizontal-looking lines. mutation_type only targets
+--   rows that have not already been changed by the percentage updates above.
 WITH mutation_targets(series_code, observation_date, multiplier) AS (
   VALUES
-    ('MEHOINUSA646N', DATE '2001-01-01', 100.00::numeric),
-    ('MEHOINUSA646N', DATE '2008-01-01', 0.01::numeric),
-    ('MEHOINUSA646N', DATE '2016-01-01', 10.00::numeric),
-    ('MEHOINUSA646N', DATE '2021-01-01', 0.10::numeric),
-    ('DSPI', DATE '2004-04-01', 10.00::numeric),
-    ('DSPI', DATE '2011-11-01', 0.01::numeric),
-    ('DSPI', DATE '2020-05-01', 100.00::numeric),
-    ('PI', DATE '2005-03-01', 0.10::numeric),
-    ('PI', DATE '2015-07-01', 100.00::numeric),
-    ('PI', DATE '2023-10-01', 0.01::numeric),
-    ('RPI', DATE '2009-12-01', 10.00::numeric),
-    ('RPI', DATE '2018-06-01', 0.01::numeric),
-    ('FODSP', DATE '2005-01-01', 100.00::numeric),
-    ('FODSP', DATE '2010-04-01', 0.10::numeric),
-    ('FODSP', DATE '2020-01-01', 10.00::numeric)
+    ('MEHOINUSA646N', DATE '2001-01-01', 1.85::numeric),
+    ('MEHOINUSA646N', DATE '2008-01-01', 0.55::numeric),
+    ('MEHOINUSA646N', DATE '2016-01-01', 1.60::numeric),
+    ('MEHOINUSA646N', DATE '2021-01-01', 0.70::numeric),
+    ('DSPI', DATE '2004-04-01', 1.75::numeric),
+    ('DSPI', DATE '2011-11-01', 0.60::numeric),
+    ('DSPI', DATE '2020-05-01', 1.90::numeric),
+    ('PI', DATE '2005-03-01', 0.65::numeric),
+    ('PI', DATE '2015-07-01', 2.00::numeric),
+    ('PI', DATE '2023-10-01', 0.50::numeric),
+    ('RPI', DATE '2009-12-01', 1.50::numeric),
+    ('RPI', DATE '2018-06-01', 0.75::numeric),
+    ('FODSP', DATE '2005-01-01', 1.80::numeric),
+    ('FODSP', DATE '2010-04-01', 0.55::numeric),
+    ('FODSP', DATE '2020-01-01', 1.60::numeric)
 ), selected_mutations AS (
   SELECT
     data.observation_id,
@@ -178,18 +179,18 @@ UPDATE income_bad_mutated.income_observation_mutated target
 SET
   observation_value = target.original_value * selected_mutations.multiplier,
   mutation_type = CASE
-    WHEN selected_mutations.multiplier IN (10.00, 100.00)
-      THEN 'point_order_of_magnitude_increase'
-    ELSE 'point_order_of_magnitude_decrease'
+    WHEN selected_mutations.multiplier > 1
+      THEN 'capped_large_point_increase'
+    ELSE 'capped_large_point_decrease'
   END,
   mutation_note = CASE
-    WHEN selected_mutations.multiplier = 100.00
-      THEN 'Arbitrarily increased by two orders of magnitude by multiplying by 100.'
-    WHEN selected_mutations.multiplier = 10.00
-      THEN 'Arbitrarily increased by one order of magnitude by multiplying by 10.'
-    WHEN selected_mutations.multiplier = 0.10
-      THEN 'Arbitrarily decreased by one order of magnitude by multiplying by 0.10.'
-    ELSE 'Arbitrarily decreased by two orders of magnitude by multiplying by 0.01.'
+    WHEN selected_mutations.multiplier > 1
+      THEN 'Arbitrarily increased by '
+        || ROUND(((selected_mutations.multiplier - 1) * 100)::numeric, 2)::text
+        || ' percent as a capped large point error.'
+    ELSE 'Arbitrarily decreased by '
+      || ROUND(((1 - selected_mutations.multiplier) * 100)::numeric, 2)::text
+      || ' percent as a capped large point error.'
   END
 FROM selected_mutations
 WHERE target.observation_id = selected_mutations.observation_id;
