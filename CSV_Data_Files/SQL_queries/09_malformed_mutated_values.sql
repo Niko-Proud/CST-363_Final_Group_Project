@@ -71,22 +71,27 @@ FROM income.v_income_observations_long;
 --   random() is evaluated per selected row, so each changed row receives a
 --   different multiplier each time this script is rerun.
 -- Display impact:
---   PI and selected median-income values drift upward unevenly instead of
---   moving by one repeated fixed percentage.
-WITH selected_mutations AS (
+--   Individual rows drift upward without creating a long carried-forward run.
+WITH mutation_targets(series_code, observation_date) AS (
+  VALUES
+    ('PI', DATE '2003-05-01'),
+    ('PI', DATE '2011-08-01'),
+    ('PI', DATE '2018-11-01'),
+    ('PI', DATE '2024-02-01'),
+    ('RPI', DATE '2006-02-01'),
+    ('RPI', DATE '2014-09-01'),
+    ('DSPI', DATE '2002-10-01'),
+    ('DSPI', DATE '2019-05-01'),
+    ('FODSP', DATE '2007-07-01'),
+    ('MEHOINUSA646N', DATE '2014-01-01')
+), selected_mutations AS (
   SELECT
-    observation_id,
+    data.observation_id,
     (1 + (0.05 + random() * 0.10))::numeric AS multiplier
-  FROM income_bad_mutated.income_observation_mutated
-  WHERE (
-      series_code = 'PI'
-      AND observation_month IN (2, 5, 8, 11)
-      AND observation_year >= 2018
-    )
-    OR (
-      series_code = 'MEHOINUSA646N'
-      AND observation_year IN (2004, 2009, 2014, 2019, 2023)
-    )
+  FROM income_bad_mutated.income_observation_mutated data
+  JOIN mutation_targets targets
+    ON targets.series_code = data.series_code
+   AND targets.observation_date = data.observation_date
 )
 UPDATE income_bad_mutated.income_observation_mutated target
 SET
@@ -102,27 +107,28 @@ WHERE target.observation_id = selected_mutations.observation_id;
 --   Apply row-specific percentage decreases between 5 and 15 percent.
 --   Each selected row receives its own randomized drop.
 -- Display impact:
---   RPI, DSPI, and FODSP develop uneven local dips that can distort trend and
---   forecast models without using one repeated multiplier.
-WITH selected_mutations AS (
+--   Individual rows develop local dips that can distort trend and forecast
+--   models without creating a repeated visual pattern.
+WITH mutation_targets(series_code, observation_date) AS (
+  VALUES
+    ('PI', DATE '2001-09-01'),
+    ('PI', DATE '2016-04-01'),
+    ('RPI', DATE '2008-10-01'),
+    ('RPI', DATE '2021-03-01'),
+    ('DSPI', DATE '2006-06-01'),
+    ('DSPI', DATE '2013-12-01'),
+    ('DSPI', DATE '2022-08-01'),
+    ('FODSP', DATE '2002-04-01'),
+    ('FODSP', DATE '2017-10-01'),
+    ('MEHOINUSA646N', DATE '2019-01-01')
+), selected_mutations AS (
   SELECT
-    observation_id,
+    data.observation_id,
     (1 - (0.05 + random() * 0.10))::numeric AS multiplier
-  FROM income_bad_mutated.income_observation_mutated
-  WHERE (
-      series_code = 'RPI'
-      AND observation_year BETWEEN 2011 AND 2018
-      AND observation_month IN (1, 4, 7, 10)
-    )
-    OR (
-      series_code = 'DSPI'
-      AND observation_month IN (3, 6, 9, 12)
-      AND observation_year BETWEEN 2006 AND 2022
-    )
-    OR (
-      series_code = 'FODSP'
-      AND observation_year IN (2002, 2007, 2012, 2017, 2022)
-    )
+  FROM income_bad_mutated.income_observation_mutated data
+  JOIN mutation_targets targets
+    ON targets.series_code = data.series_code
+   AND targets.observation_date = data.observation_date
 )
 UPDATE income_bad_mutated.income_observation_mutated target
 SET
@@ -136,70 +142,54 @@ WHERE target.observation_id = selected_mutations.observation_id;
 
 -- Specific break:
 --   Push several arbitrary rows up or down by one or two orders of magnitude.
---   Multipliers are randomly assigned from 0.01, 0.1, 10, and 100.
+--   Each row below is a one-off mistake, not part of a recurring pattern.
 -- Display impact:
 --   These selected values become obvious spikes or collapses and strongly
 --   distort regression and prediction models. mutation_type only targets rows
 --   that have not already been changed by the percentage updates above.
-WITH ranked_candidates AS (
-  SELECT
-    observation_id,
-    series_code,
-    observation_year,
-    observation_month,
-    ROW_NUMBER() OVER (
-      PARTITION BY series_code
-      ORDER BY observation_date
-    ) AS row_number_in_series
-  FROM income_bad_mutated.income_observation_mutated
-  WHERE mutation_type = 'none'
+WITH mutation_targets(series_code, observation_date, multiplier) AS (
+  VALUES
+    ('MEHOINUSA646N', DATE '2001-01-01', 100.00::numeric),
+    ('MEHOINUSA646N', DATE '2008-01-01', 0.01::numeric),
+    ('MEHOINUSA646N', DATE '2016-01-01', 10.00::numeric),
+    ('MEHOINUSA646N', DATE '2021-01-01', 0.10::numeric),
+    ('DSPI', DATE '2004-04-01', 10.00::numeric),
+    ('DSPI', DATE '2011-11-01', 0.01::numeric),
+    ('DSPI', DATE '2020-05-01', 100.00::numeric),
+    ('PI', DATE '2005-03-01', 0.10::numeric),
+    ('PI', DATE '2015-07-01', 100.00::numeric),
+    ('PI', DATE '2023-10-01', 0.01::numeric),
+    ('RPI', DATE '2009-12-01', 10.00::numeric),
+    ('RPI', DATE '2018-06-01', 0.01::numeric),
+    ('FODSP', DATE '2005-01-01', 100.00::numeric),
+    ('FODSP', DATE '2010-04-01', 0.10::numeric),
+    ('FODSP', DATE '2020-01-01', 10.00::numeric)
 ), selected_mutations AS (
   SELECT
-    observation_id,
-    CASE FLOOR(random() * 4)::integer
-      WHEN 0 THEN 0.01::numeric
-      WHEN 1 THEN 0.10::numeric
-      WHEN 2 THEN 10.00::numeric
-      ELSE 100.00::numeric
-    END AS multiplier
-  FROM ranked_candidates
-  WHERE (
-      series_code = 'MEHOINUSA646N'
-      AND observation_year IN (2001, 2008, 2016, 2021)
-    )
-    OR (
-      series_code = 'DSPI'
-      AND row_number_in_series % 37 = 0
-    )
-    OR (
-      series_code = 'PI'
-      AND row_number_in_series % 41 = 0
-    )
-    OR (
-      series_code = 'RPI'
-      AND row_number_in_series % 43 = 0
-    )
-    OR (
-      series_code = 'FODSP'
-      AND observation_year IN (2005, 2010, 2015, 2020)
-    )
+    data.observation_id,
+    targets.multiplier
+  FROM income_bad_mutated.income_observation_mutated data
+  JOIN mutation_targets targets
+    ON targets.series_code = data.series_code
+   AND targets.observation_date = data.observation_date
+  WHERE mutation_type = 'none'
 )
 UPDATE income_bad_mutated.income_observation_mutated target
 SET
   observation_value = target.original_value * selected_mutations.multiplier,
   mutation_type = CASE
     WHEN selected_mutations.multiplier IN (10.00, 100.00)
-      THEN 'random_order_of_magnitude_increase'
-    ELSE 'random_order_of_magnitude_decrease'
+      THEN 'point_order_of_magnitude_increase'
+    ELSE 'point_order_of_magnitude_decrease'
   END,
   mutation_note = CASE
     WHEN selected_mutations.multiplier = 100.00
-      THEN 'Randomly increased by two orders of magnitude by multiplying by 100.'
+      THEN 'Arbitrarily increased by two orders of magnitude by multiplying by 100.'
     WHEN selected_mutations.multiplier = 10.00
-      THEN 'Randomly increased by one order of magnitude by multiplying by 10.'
+      THEN 'Arbitrarily increased by one order of magnitude by multiplying by 10.'
     WHEN selected_mutations.multiplier = 0.10
-      THEN 'Randomly decreased by one order of magnitude by multiplying by 0.10.'
-    ELSE 'Randomly decreased by two orders of magnitude by multiplying by 0.01.'
+      THEN 'Arbitrarily decreased by one order of magnitude by multiplying by 0.10.'
+    ELSE 'Arbitrarily decreased by two orders of magnitude by multiplying by 0.01.'
   END
 FROM selected_mutations
 WHERE target.observation_id = selected_mutations.observation_id;
