@@ -3,7 +3,7 @@
 
 # Packages required by the app. The check below gives a clearer startup error
 # than letting library() fail halfway through app initialization.
-required_packages <- c("shiny", "ggplot2", "corrplot", "DBI", "RPostgres")
+required_packages <- c("shiny", "ggplot2", "corrplot", "DBI", "RPostgres", "forecast")
 missing_packages <- required_packages[
   !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
 ]
@@ -58,6 +58,7 @@ app_dir <- get_app_directory()
 source(file.path(app_dir, "db_connect.r"), chdir = TRUE)
 source(file.path(app_dir, "income_query.r"), chdir = TRUE)
 source(file.path(app_dir, "monthly_growth_query.r"), chdir = TRUE)
+source(file.path(app_dir, "forecast_query.r"), chdir = TRUE)
 
 # Read startup values from the database before the UI is created.
 state_choices <- get_state_choices()
@@ -78,6 +79,11 @@ if (length(default_states) == 0) {
 # Format numeric values as dollar amounts for plot axes.
 money_labels <- function(values) {
   paste0("$", format(round(values), big.mark = ",", scientific = FALSE, trim = TRUE))
+}
+
+# Format affordability ratios for the forecasting tab.
+ratio_labels <- function(values) {
+  format(round(values, 2), big.mark = ",", scientific = FALSE, trim = TRUE)
 }
 
 # Return safe slider ranges for the income visualization controls.
@@ -138,6 +144,20 @@ income_visual_shapes <- c(
 # Used by the checkbox controls to enable or disable plotted income datasets.
 income_tracked_value_choices <- names(income_visual_colors)
 
+# Forecast colors are separate from income-malformation colors to keep the
+# forecast tab focused on model comparison.
+forecast_model_colors <- c(
+  "Linear Regression" = "#007A5E",
+  "ARIMA" = "#005AB5",
+  "ETS" = "#C74700"
+)
+
+forecast_model_line_types <- c(
+  "Linear Regression" = "dotdash",
+  "ARIMA" = "solid",
+  "ETS" = "dashed"
+)
+
 # UI
 ui <- fluidPage(
   tags$head(
@@ -174,6 +194,19 @@ ui <- fluidPage(
       .income-table-scroll table {
         white-space: nowrap;
       }
+
+      .forecast-controls .form-group {
+        margin-bottom: 0;
+      }
+
+      .forecast-controls .btn {
+        margin-right: 8px;
+        margin-top: 8px;
+      }
+
+      .forecast-controls .checkbox-inline {
+        margin-right: 12px;
+      }
     "))
   ),
   titlePanel("Interactive Housing Data Dashboard"),
@@ -193,6 +226,107 @@ ui <- fluidPage(
       div(
         class = "plot-area",
         plotOutput("monthlyGrowthPlot", height = "720px")
+      )
+    ),
+    tabPanel(
+      "Affordability Forecasts",
+      div(
+        class = "well forecast-controls",
+        fluidRow(
+          column(
+            width = 6,
+            sliderInput(
+              "forecastHorizon",
+              "Forecast Horizon:",
+              min = 1,
+              max = 10,
+              value = 5,
+              step = 1,
+              post = " years",
+              width = "100%"
+            )
+          ),
+          column(
+            width = 6,
+            sliderInput(
+              "forecastTestYears",
+              "Holdout Test Window:",
+              min = 1,
+              max = 5,
+              value = 3,
+              step = 1,
+              post = " years",
+              width = "100%"
+            )
+          )
+        )
+      ),
+      div(
+        class = "plot-area",
+        plotOutput("affordabilityForecastPlot", height = "760px")
+      ),
+      div(
+        class = "income-table-scroll",
+        tableOutput("affordabilityForecastMetrics")
+      )
+    ),
+    tabPanel(
+      "Income Forecast Impact",
+      div(
+        class = "well forecast-controls",
+        fluidRow(
+          column(
+            width = 6,
+            checkboxGroupInput(
+              "incomeForecastDatasets",
+              "Income Data Versions:",
+              choices = income_tracked_value_choices,
+              selected = income_tracked_value_choices,
+              inline = TRUE
+            )
+          ),
+          column(
+            width = 3,
+            sliderInput(
+              "incomeForecastHorizon",
+              "Forecast Horizon:",
+              min = 1,
+              max = 10,
+              value = 5,
+              step = 1,
+              post = " years",
+              width = "100%"
+            )
+          ),
+          column(
+            width = 3,
+            sliderInput(
+              "incomeForecastTestYears",
+              "Holdout Test Window:",
+              min = 1,
+              max = 5,
+              value = 3,
+              step = 1,
+              post = " years",
+              width = "100%"
+            )
+          )
+        ),
+        fluidRow(
+          column(
+            width = 12,
+            actionButton("enableAllIncomeForecastDatasets", "Enable All", class = "btn-default"),
+            actionButton("disableAllIncomeForecastDatasets", "Disable All", class = "btn-default")
+          )
+        )
+      ),
+      div(
+        class = "plot-area",
+        plotOutput("incomeForecastImpactPlot", height = "820px")
+      ),
+      div(
+        class = "income-table-scroll",
+        tableOutput("incomeForecastImpactMetrics")
       )
     ),
     tabPanel(
@@ -406,6 +540,306 @@ server <- function(input, output, session) {
 
     title("Average Monthly Housing Price Change (%)", line = 0.5)
   })
+
+  # Fit ARIMA and ETS affordability forecasts for the selected states.
+  affordability_forecast_results <- reactive({
+    selected_states <- input$datasets
+
+    get_affordability_forecast_results(
+      states = selected_states,
+      horizon_years = input$forecastHorizon,
+      test_years = input$forecastTestYears
+    )
+  })
+
+  # Render historical affordability ratios plus ARIMA/ETS forecasts.
+  output$affordabilityForecastPlot <- renderPlot({
+    forecast_results <- affordability_forecast_results()
+    history_data <- forecast_results$history
+    forecast_data <- forecast_results$forecast
+    validation_message <- forecast_results$message
+
+    if (is.null(validation_message)) {
+      validation_message <- "Forecast models could not be fit for the selected data."
+    }
+
+    validate(need(
+      nrow(history_data) > 0 && nrow(forecast_data) > 0,
+      validation_message
+    ))
+
+    ggplot() +
+      geom_line(
+        data = history_data,
+        aes(x = date, y = value),
+        color = "#1F2937",
+        linewidth = 0.95
+      ) +
+      geom_point(
+        data = history_data,
+        aes(x = date, y = value),
+        color = "#1F2937",
+        size = 1.8,
+        alpha = 0.9
+      ) +
+      geom_ribbon(
+        data = forecast_data,
+        aes(x = date, ymin = lower95, ymax = upper95, fill = model),
+        alpha = 0.14
+      ) +
+      geom_ribbon(
+        data = forecast_data,
+        aes(x = date, ymin = lower80, ymax = upper80, fill = model),
+        alpha = 0.24
+      ) +
+      geom_line(
+        data = forecast_data,
+        aes(x = date, y = value, color = model, linetype = model),
+        linewidth = 1.05
+      ) +
+      geom_point(
+        data = forecast_data,
+        aes(x = date, y = value, color = model),
+        size = 1.8
+      ) +
+      facet_wrap(~ dataset, scales = "free_y") +
+      scale_color_manual(values = forecast_model_colors) +
+      scale_fill_manual(values = forecast_model_colors) +
+      scale_linetype_manual(values = forecast_model_line_types) +
+      scale_y_continuous(labels = ratio_labels) +
+      labs(
+        title = "Housing Affordability Forecasts",
+        x = "Year",
+        y = "Housing Price to Income Ratio",
+        color = "Model",
+        fill = "Model",
+        linetype = "Model"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "bottom",
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"),
+        strip.text = element_text(face = "bold")
+      )
+  })
+
+  # Show RMSE and MAE from the holdout comparison for each model.
+  output$affordabilityForecastMetrics <- renderTable({
+    forecast_results <- affordability_forecast_results()
+    metrics <- forecast_results$metrics
+
+    if (nrow(metrics) == 0) {
+      validation_message <- forecast_results$message
+
+      if (is.null(validation_message)) {
+        validation_message <- "No model performance metrics were available."
+      }
+
+      return(data.frame(message = validation_message))
+    }
+
+    metrics$rmse <- round(metrics$rmse, 3)
+    metrics$mae <- round(metrics$mae, 3)
+    metrics[order(metrics$dataset, metrics$rmse, metrics$mae), ]
+  },
+  striped = TRUE,
+  hover = TRUE,
+  bordered = TRUE,
+  spacing = "s",
+  width = "100%")
+
+  # Enable every income data version in the model-impact tab.
+  observeEvent(input$enableAllIncomeForecastDatasets, {
+    updateCheckboxGroupInput(
+      session,
+      "incomeForecastDatasets",
+      selected = income_tracked_value_choices
+    )
+  })
+
+  # Disable every income data version in the model-impact tab.
+  observeEvent(input$disableAllIncomeForecastDatasets, {
+    updateCheckboxGroupInput(session, "incomeForecastDatasets", selected = character(0))
+  })
+
+  # Fit regression, ARIMA, and ETS models to clean and malformed income data.
+  income_model_impact_results <- reactive({
+    forecast_results <- get_income_model_impact_results(
+      horizon_years = input$incomeForecastHorizon,
+      test_years = input$incomeForecastTestYears
+    )
+
+    selected_datasets <- input$incomeForecastDatasets
+    if (is.null(selected_datasets)) {
+      selected_datasets <- income_tracked_value_choices
+    }
+
+    if (length(selected_datasets) == 0) {
+      return(empty_income_model_impact_result(
+        "Select at least one income data version to compare model behavior."
+      ))
+    }
+
+    if (nrow(forecast_results$history) == 0 || nrow(forecast_results$forecast) == 0) {
+      return(forecast_results)
+    }
+
+    forecast_results$history <- forecast_results$history[
+      forecast_results$history$dataset %in% selected_datasets,
+    ]
+    forecast_results$forecast <- forecast_results$forecast[
+      forecast_results$forecast$dataset %in% selected_datasets,
+    ]
+
+    if ("dataset" %in% names(forecast_results$metrics)) {
+      forecast_results$metrics <- forecast_results$metrics[
+        forecast_results$metrics$dataset %in% selected_datasets,
+      ]
+    }
+
+    if (nrow(forecast_results$history) == 0 || nrow(forecast_results$forecast) == 0) {
+      return(empty_income_model_impact_result(
+        "No model results were available for the selected income data versions."
+      ))
+    }
+
+    forecast_results
+  })
+
+  # Render how malformed income data changes regression and forecast outputs.
+  output$incomeForecastImpactPlot <- renderPlot({
+    forecast_results <- income_model_impact_results()
+    history_data <- forecast_results$history
+    forecast_data <- forecast_results$forecast
+    validation_message <- forecast_results$message
+
+    if (is.null(validation_message)) {
+      validation_message <- "Income models could not be fit for the selected data."
+    }
+
+    validate(need(
+      nrow(history_data) > 0 && nrow(forecast_data) > 0,
+      validation_message
+    ))
+
+    ggplot() +
+      geom_line(
+        data = history_data,
+        aes(x = date, y = value),
+        color = "#1F2937",
+        linewidth = 0.95
+      ) +
+      geom_point(
+        data = history_data,
+        aes(x = date, y = value),
+        color = "#1F2937",
+        size = 1.8,
+        alpha = 0.9
+      ) +
+      geom_ribbon(
+        data = forecast_data,
+        aes(x = date, ymin = lower95, ymax = upper95, fill = model),
+        alpha = 0.12
+      ) +
+      geom_ribbon(
+        data = forecast_data,
+        aes(x = date, ymin = lower80, ymax = upper80, fill = model),
+        alpha = 0.22
+      ) +
+      geom_line(
+        data = forecast_data,
+        aes(x = date, y = value, color = model, linetype = model),
+        linewidth = 1.05
+      ) +
+      geom_point(
+        data = forecast_data,
+        aes(x = date, y = value, color = model),
+        size = 1.8
+      ) +
+      facet_wrap(~ dataset, scales = "free_y") +
+      scale_color_manual(values = forecast_model_colors) +
+      scale_fill_manual(values = forecast_model_colors) +
+      scale_linetype_manual(values = forecast_model_line_types) +
+      scale_y_continuous(labels = money_labels) +
+      labs(
+        title = "Income Forecast Impact From Malformed Data",
+        x = "Year",
+        y = "Displayed Median Income Value",
+        color = "Model",
+        fill = "Model",
+        linetype = "Model"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "bottom",
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"),
+        strip.text = element_text(face = "bold")
+      )
+  })
+
+  # Show model accuracy and final forecast movement for each income data version.
+  output$incomeForecastImpactMetrics <- renderTable({
+    forecast_results <- income_model_impact_results()
+    metrics <- forecast_results$metrics
+
+    if (nrow(metrics) == 0 || !("dataset" %in% names(metrics))) {
+      validation_message <- forecast_results$message
+
+      if (is.null(validation_message)) {
+        validation_message <- "No income model performance metrics were available."
+      }
+
+      return(data.frame(message = validation_message))
+    }
+
+    history_data <- forecast_results$history[
+      order(forecast_results$history$dataset, forecast_results$history$observation_year),
+    ]
+    latest_history <- do.call(rbind, lapply(split(history_data, history_data$dataset), tail, 1))
+    latest_history <- data.frame(
+      dataset = latest_history$dataset,
+      last_historical_value = latest_history$value,
+      stringsAsFactors = FALSE
+    )
+
+    forecast_data <- forecast_results$forecast[
+      order(
+        forecast_results$forecast$dataset,
+        forecast_results$forecast$model,
+        forecast_results$forecast$observation_year
+      ),
+    ]
+    latest_forecast <- do.call(
+      rbind,
+      lapply(split(forecast_data, paste(forecast_data$dataset, forecast_data$model)), tail, 1)
+    )
+    latest_forecast <- data.frame(
+      dataset = latest_forecast$dataset,
+      model = latest_forecast$model,
+      final_forecast_value = latest_forecast$value,
+      stringsAsFactors = FALSE
+    )
+
+    metrics <- merge(metrics, latest_history, by = "dataset", all.x = TRUE)
+    metrics <- merge(metrics, latest_forecast, by = c("dataset", "model"), all.x = TRUE)
+    metrics$forecast_change_percent <- 100 *
+      (metrics$final_forecast_value - metrics$last_historical_value) /
+      metrics$last_historical_value
+
+    metrics$rmse <- round(metrics$rmse, 2)
+    metrics$mae <- round(metrics$mae, 2)
+    metrics$last_historical_value <- round(metrics$last_historical_value, 2)
+    metrics$final_forecast_value <- round(metrics$final_forecast_value, 2)
+    metrics$forecast_change_percent <- round(metrics$forecast_change_percent, 2)
+    metrics[order(metrics$dataset, metrics$rmse, metrics$mae), ]
+  },
+  striped = TRUE,
+  hover = TRUE,
+  bordered = TRUE,
+  spacing = "s",
+  width = "100%")
 
   # Pull all available clean/malformed income plot data from the database.
   income_visualization_data <- reactive({
