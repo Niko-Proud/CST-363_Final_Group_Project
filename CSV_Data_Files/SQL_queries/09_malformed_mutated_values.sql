@@ -67,64 +67,142 @@ SELECT
 FROM income.v_income_observations_long;
 
 -- Specific break:
---   Add a zero to later median household income values.
+--   Apply row-specific percentage increases between 5 and 15 percent.
+--   random() is evaluated per selected row, so each changed row receives a
+--   different multiplier each time this script is rerun.
 -- Display impact:
---   The plotted annual line jumps by one order of magnitude after 2015.
-UPDATE income_bad_mutated.income_observation_mutated
+--   PI and selected median-income values drift upward unevenly instead of
+--   moving by one repeated fixed percentage.
+WITH selected_mutations AS (
+  SELECT
+    observation_id,
+    (1 + (0.05 + random() * 0.10))::numeric AS multiplier
+  FROM income_bad_mutated.income_observation_mutated
+  WHERE (
+      series_code = 'PI'
+      AND observation_month IN (2, 5, 8, 11)
+      AND observation_year >= 2018
+    )
+    OR (
+      series_code = 'MEHOINUSA646N'
+      AND observation_year IN (2004, 2009, 2014, 2019, 2023)
+    )
+)
+UPDATE income_bad_mutated.income_observation_mutated target
 SET
-  observation_value = original_value * 10,
-  mutation_type = 'order_of_magnitude_increase',
-  mutation_note = 'Added a zero by multiplying the value by 10.'
-WHERE series_code = 'MEHOINUSA646N'
-  AND observation_year >= 2015;
+  observation_value = target.original_value * selected_mutations.multiplier,
+  mutation_type = 'row_specific_percentage_increase',
+  mutation_note = 'Row-specific increase of '
+    || ROUND(((selected_mutations.multiplier - 1) * 100)::numeric, 2)::text
+    || ' percent.'
+FROM selected_mutations
+WHERE target.observation_id = selected_mutations.observation_id;
 
 -- Specific break:
---   Drop a zero from FODSP values during 2008-2010.
+--   Apply row-specific percentage decreases between 5 and 15 percent.
+--   Each selected row receives its own randomized drop.
 -- Display impact:
---   The series dips far below its surrounding values.
-UPDATE income_bad_mutated.income_observation_mutated
+--   RPI, DSPI, and FODSP develop uneven local dips that can distort trend and
+--   forecast models without using one repeated multiplier.
+WITH selected_mutations AS (
+  SELECT
+    observation_id,
+    (1 - (0.05 + random() * 0.10))::numeric AS multiplier
+  FROM income_bad_mutated.income_observation_mutated
+  WHERE (
+      series_code = 'RPI'
+      AND observation_year BETWEEN 2011 AND 2018
+      AND observation_month IN (1, 4, 7, 10)
+    )
+    OR (
+      series_code = 'DSPI'
+      AND observation_month IN (3, 6, 9, 12)
+      AND observation_year BETWEEN 2006 AND 2022
+    )
+    OR (
+      series_code = 'FODSP'
+      AND observation_year IN (2002, 2007, 2012, 2017, 2022)
+    )
+)
+UPDATE income_bad_mutated.income_observation_mutated target
 SET
-  observation_value = original_value / 10,
-  mutation_type = 'order_of_magnitude_decrease',
-  mutation_note = 'Dropped a zero by dividing the value by 10.'
-WHERE series_code = 'FODSP'
-  AND observation_year BETWEEN 2008 AND 2010;
+  observation_value = target.original_value * selected_mutations.multiplier,
+  mutation_type = 'row_specific_percentage_decrease',
+  mutation_note = 'Row-specific decrease of '
+    || ROUND(((1 - selected_mutations.multiplier) * 100)::numeric, 2)::text
+    || ' percent.'
+FROM selected_mutations
+WHERE target.observation_id = selected_mutations.observation_id;
 
 -- Specific break:
---   Increase personal income by 18 percent after 2020.
+--   Push several arbitrary rows up or down by one or two orders of magnitude.
+--   Multipliers are randomly assigned from 0.01, 0.1, 10, and 100.
 -- Display impact:
---   PI appears to rise faster than the clean data supports.
-UPDATE income_bad_mutated.income_observation_mutated
+--   These selected values become obvious spikes or collapses and strongly
+--   distort regression and prediction models. mutation_type only targets rows
+--   that have not already been changed by the percentage updates above.
+WITH ranked_candidates AS (
+  SELECT
+    observation_id,
+    series_code,
+    observation_year,
+    observation_month,
+    ROW_NUMBER() OVER (
+      PARTITION BY series_code
+      ORDER BY observation_date
+    ) AS row_number_in_series
+  FROM income_bad_mutated.income_observation_mutated
+  WHERE mutation_type = 'none'
+), selected_mutations AS (
+  SELECT
+    observation_id,
+    CASE FLOOR(random() * 4)::integer
+      WHEN 0 THEN 0.01::numeric
+      WHEN 1 THEN 0.10::numeric
+      WHEN 2 THEN 10.00::numeric
+      ELSE 100.00::numeric
+    END AS multiplier
+  FROM ranked_candidates
+  WHERE (
+      series_code = 'MEHOINUSA646N'
+      AND observation_year IN (2001, 2008, 2016, 2021)
+    )
+    OR (
+      series_code = 'DSPI'
+      AND row_number_in_series % 37 = 0
+    )
+    OR (
+      series_code = 'PI'
+      AND row_number_in_series % 41 = 0
+    )
+    OR (
+      series_code = 'RPI'
+      AND row_number_in_series % 43 = 0
+    )
+    OR (
+      series_code = 'FODSP'
+      AND observation_year IN (2005, 2010, 2015, 2020)
+    )
+)
+UPDATE income_bad_mutated.income_observation_mutated target
 SET
-  observation_value = original_value * 1.18,
-  mutation_type = 'percentage_increase',
-  mutation_note = 'Increased by 18 percent.'
-WHERE series_code = 'PI'
-  AND observation_year >= 2020;
-
--- Specific break:
---   Decrease real personal income by 14 percent from 2012-2016.
--- Display impact:
---   RPI appears artificially weaker during those years.
-UPDATE income_bad_mutated.income_observation_mutated
-SET
-  observation_value = original_value * 0.86,
-  mutation_type = 'percentage_decrease',
-  mutation_note = 'Decreased by 14 percent.'
-WHERE series_code = 'RPI'
-  AND observation_year BETWEEN 2012 AND 2016;
-
--- Specific break:
---   Increase quarter-ending DSPI values by 7 percent.
--- Display impact:
---   DSPI gets regular artificial bumps in March, June, September, and December.
-UPDATE income_bad_mutated.income_observation_mutated
-SET
-  observation_value = original_value * 1.07,
-  mutation_type = 'recurring_percentage_increase',
-  mutation_note = 'Quarter-ending month increased by 7 percent.'
-WHERE series_code = 'DSPI'
-  AND observation_month IN (3, 6, 9, 12);
+  observation_value = target.original_value * selected_mutations.multiplier,
+  mutation_type = CASE
+    WHEN selected_mutations.multiplier IN (10.00, 100.00)
+      THEN 'random_order_of_magnitude_increase'
+    ELSE 'random_order_of_magnitude_decrease'
+  END,
+  mutation_note = CASE
+    WHEN selected_mutations.multiplier = 100.00
+      THEN 'Randomly increased by two orders of magnitude by multiplying by 100.'
+    WHEN selected_mutations.multiplier = 10.00
+      THEN 'Randomly increased by one order of magnitude by multiplying by 10.'
+    WHEN selected_mutations.multiplier = 0.10
+      THEN 'Randomly decreased by one order of magnitude by multiplying by 0.10.'
+    ELSE 'Randomly decreased by two orders of magnitude by multiplying by 0.01.'
+  END
+FROM selected_mutations
+WHERE target.observation_id = selected_mutations.observation_id;
 
 CREATE OR REPLACE VIEW income_bad_mutated.v_observations_long AS
 SELECT
@@ -168,7 +246,21 @@ SELECT
   COUNT(*) AS row_count,
   AVG(original_value) AS average_original_value,
   AVG(observation_value) AS average_mutated_value,
-  AVG(observation_value - original_value) AS average_difference
+  AVG(observation_value - original_value) AS average_difference,
+  MIN(observation_value - original_value) AS minimum_difference,
+  MAX(observation_value - original_value) AS maximum_difference,
+  MIN(
+    CASE
+      WHEN original_value = 0 THEN NULL
+      ELSE ((observation_value - original_value) / original_value) * 100
+    END
+  ) AS minimum_percent_difference,
+  MAX(
+    CASE
+      WHEN original_value = 0 THEN NULL
+      ELSE ((observation_value - original_value) / original_value) * 100
+    END
+  ) AS maximum_percent_difference
 FROM income_bad_mutated.v_observations_long
 GROUP BY
   series_code,
