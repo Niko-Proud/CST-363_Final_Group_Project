@@ -1,29 +1,147 @@
+# Main Shiny application for the housing and income dashboard.
+# run_app.R or run_app_3839.R should be used to launch this file.
+
+# Packages required by the app. The check below gives a clearer startup error
+# than letting library() fail halfway through app initialization.
+required_packages <- c("shiny", "ggplot2", "corrplot", "DBI", "RPostgres")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+# Stop early if a required package is missing.
+if (length(missing_packages) > 0) {
+  stop(
+    "Missing required R packages: ",
+    paste(missing_packages, collapse = ", "),
+    ". Install them with install.packages(c(",
+    paste(sprintf('"%s"', missing_packages), collapse = ", "),
+    ")).",
+    call. = FALSE
+  )
+}
+
+# Load packages after verifying that all required packages are installed.
 library(shiny)
 library(ggplot2)
 library(corrplot)
-source("db_connect.r")
-source("income_query.r")
-source("monthly_growth_query.r")
 
+# Find the project folder so source() calls work even when RStudio's working
+# directory is not the same as the file location.
+get_app_directory <- function() {
+  source_file <- NULL
+
+  # When app.R is sourced, one of the call frames stores the file path.
+  for (frame in sys.frames()) {
+    if (!is.null(frame$ofile)) {
+      source_file <- frame$ofile
+      break
+    }
+  }
+
+  # If the script is being run interactively from RStudio, use the active file path.
+  if ((is.null(source_file) || !nzchar(source_file)) &&
+      requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {
+    source_file <- rstudioapi::getActiveDocumentContext()$path
+  }
+
+  # Use the detected file folder when available; otherwise fall back to getwd().
+  if (!is.null(source_file) && nzchar(source_file)) {
+    return(dirname(normalizePath(source_file, winslash = "/", mustWork = TRUE)))
+  }
+
+  getwd()
+}
+
+# Source helper files from the detected app folder.
+app_dir <- get_app_directory()
+source(file.path(app_dir, "db_connect.r"), chdir = TRUE)
+source(file.path(app_dir, "income_query.r"), chdir = TRUE)
+source(file.path(app_dir, "monthly_growth_query.r"), chdir = TRUE)
+
+# Read startup values from the database before the UI is created.
 state_choices <- get_state_choices()
 date_limits <- get_date_limits()
+income_table_sources <- get_income_table_sources()
 
+# The dashboard cannot function if the housing table has no state names.
 if (length(state_choices) == 0) {
   stop("No states were found in the housing_prices table.", call. = FALSE)
 }
 
+# Prefer common comparison states, but fall back to the first two available states.
 default_states <- intersect(c("California", "Texas"), state_choices)
 if (length(default_states) == 0) {
   default_states <- head(state_choices, 2)
 }
 
+# Format numeric values as dollar amounts for plot axes.
 money_labels <- function(values) {
   paste0("$", format(round(values), big.mark = ",", scientific = FALSE, trim = TRUE))
 }
 
+# Return safe slider ranges for the income visualization controls.
+get_income_visualization_ranges <- function(plot_data) {
+  # Empty data means the control sliders should not be rendered.
+  if (nrow(plot_data) == 0) {
+    return(list(dates = NULL, values = NULL))
+  }
+
+  date_range <- range(plot_data$date, na.rm = TRUE)
+  value_range <- range(plot_data$zhvi, na.rm = TRUE)
+
+  # Invalid date ranges are represented as NULL so renderUI can skip that slider.
+  if (any(is.na(date_range))) {
+    date_range <- NULL
+  }
+
+  # Invalid or flat numeric ranges are adjusted so sliderInput has usable bounds.
+  if (!all(is.finite(value_range))) {
+    value_range <- NULL
+  } else if (value_range[1] == value_range[2]) {
+    value_range <- value_range + c(-1, 1)
+  }
+
+  list(dates = date_range, values = value_range)
+}
+
+# High-contrast, colorblind-friendlier colors for the clean and malformed income data.
+income_visual_colors <- c(
+  "Clean" = "#005AB5",
+  "Duplicate Rows" = "#C74700",
+  "Improper Normalization" = "#007A5E",
+  "Denormalized Mixed Types" = "#8B3A96",
+  "Incomplete Data" = "#1F2937",
+  "Mutated Values" = "#8A6F00"
+)
+
+# Line types and point shapes provide non-color cues for accessibility.
+income_visual_line_types <- c(
+  "Clean" = "solid",
+  "Duplicate Rows" = "dashed",
+  "Improper Normalization" = "dotdash",
+  "Denormalized Mixed Types" = "twodash",
+  "Incomplete Data" = "longdash",
+  "Mutated Values" = "dotted"
+)
+
+# Point shapes match the same dataset labels used by the colors and line types.
+income_visual_shapes <- c(
+  "Clean" = 16,
+  "Duplicate Rows" = 17,
+  "Improper Normalization" = 15,
+  "Denormalized Mixed Types" = 18,
+  "Incomplete Data" = 4,
+  "Mutated Values" = 8
+)
+
+# Used by the checkbox controls to enable or disable plotted income datasets.
+income_tracked_value_choices <- names(income_visual_colors)
+
 # UI
 ui <- fluidPage(
   tags$head(
+    # Small layout adjustments for controls, plot spacing, and wide table output.
     tags$style(HTML("
       .plot-area {
         margin-bottom: 18px;
@@ -36,10 +154,31 @@ ui <- fluidPage(
       .controls-panel .form-group {
         margin-bottom: 0;
       }
+
+      .controls-panel .btn,
+      .income-visual-controls .btn {
+        margin-right: 8px;
+        margin-top: 8px;
+      }
+
+      .income-visual-controls .checkbox-inline {
+        margin-right: 12px;
+      }
+
+      .income-table-scroll {
+        max-height: 560px;
+        overflow: auto;
+        font-size: 12px;
+      }
+
+      .income-table-scroll table {
+        white-space: nowrap;
+      }
     "))
   ),
   titlePanel("Interactive Housing Data Dashboard"),
 
+  # Main navigation tabs for housing plots, income plots, and raw income tables.
   tabsetPanel(
     id = "visualizationTabs",
     tabPanel(
@@ -55,9 +194,52 @@ ui <- fluidPage(
         class = "plot-area",
         plotOutput("monthlyGrowthPlot", height = "720px")
       )
+    ),
+    tabPanel(
+      "Income Data Visuals",
+      # Controls are rendered dynamically because their slider ranges come from data.
+      uiOutput("incomeVisualControls"),
+      div(
+        class = "plot-area",
+        plotOutput(
+          "incomeMalformedLinePlot",
+          height = "620px",
+          # Brushing lets the user drag over part of the line plot to zoom.
+          brush = brushOpts(
+            id = "incomeLineBrush",
+            direction = "xy",
+            resetOnNew = FALSE
+          )
+        )
+      ),
+      div(
+        class = "plot-area",
+        plotOutput("incomeMalformedHistogram", height = "760px")
+      )
+    ),
+    tabPanel(
+      "Income Data Tables",
+      # Build one table tab for each clean or malformed income source.
+      do.call(
+        tabsetPanel,
+        c(
+          list(id = "incomeDataTabs"),
+          lapply(seq_len(nrow(income_table_sources)), function(row_index) {
+            source_row <- income_table_sources[row_index, ]
+            tabPanel(
+              source_row$label,
+              div(
+                class = "income-table-scroll",
+                tableOutput(paste0(source_row$key, "Table"))
+              )
+            )
+          })
+        )
+      )
     )
   ),
 
+  # Shared housing controls used by the price-trend and monthly-change tabs.
   div(
     class = "well controls-panel",
     fluidRow(
@@ -71,7 +253,8 @@ ui <- fluidPage(
                        options = list(
                          plugins = list("remove_button"),
                          placeholder = "Select states"
-                       ))
+                       )),
+        actionButton("clearStates", "Clear States", class = "btn-default")
       ),
       column(
         width = 8,
@@ -87,35 +270,65 @@ ui <- fluidPage(
 )
 
 # Server
-server <- function(input, output) {
+server <- function(input, output, session) {
 
+  # Clear the state selector without changing the date range.
+  observeEvent(input$clearStates, {
+    updateSelectizeInput(session, "datasets", selected = character(0))
+  })
+
+  # Pull combined housing and income data whenever state or date controls change.
   filtered_data <- reactive({
-    req(input$datasets)
     req(input$dateRange)
+    selected_states <- input$datasets
+
+    # Return an empty data frame so renderPlot can show a friendly validation message.
+    if (is.null(selected_states) || length(selected_states) == 0) {
+      return(data.frame(
+        dataset = character(),
+        date = as.Date(character()),
+        value = numeric()
+      ))
+    }
+
     selected_dates <- as.Date(input$dateRange, origin = "1970-01-01")
 
+    # Query helper handles the SQL filtering and joins.
     get_state_income_comparison_data(
-      states = input$datasets,
+      states = selected_states,
       start_date = selected_dates[1],
       end_date = selected_dates[2]
     )
   })
 
+  # Pull monthly percent-change data for the selected states and date range.
   monthly_growth_data <- reactive({
-    req(input$datasets)
     req(input$dateRange)
+    selected_states <- input$datasets
+
+    # corrplot needs a matrix, so return a message object if no states are selected.
+    if (is.null(selected_states) || length(selected_states) == 0) {
+      return(list(
+        percent_change_matrix = NULL,
+        message = "Select at least one state to display monthly changes."
+      ))
+    }
+
     selected_dates <- as.Date(input$dateRange, origin = "1970-01-01")
 
+    # Query helper converts long SQL results into the matrix used by corrplot.
     get_state_monthly_percent_change_matrix(
-      states = input$datasets,
+      states = selected_states,
       start_date = selected_dates[1],
       end_date = selected_dates[2]
     )
   })
 
+  # Render the main line chart comparing selected state prices with income data.
   output$housingPlot <- renderPlot({
     plot_data <- filtered_data()
-    validate(need(nrow(plot_data) > 0, "No housing data found for the selected filters."))
+    # validate/need prints the message inside the plot area when there is no data.
+    validate(need(nrow(plot_data) > 0, "Select at least one state with data to display the price trends."))
 
     ggplot(plot_data, aes(x = date, y = value, color = dataset, group = dataset)) +
       geom_line() +
@@ -134,15 +347,18 @@ server <- function(input, output) {
       )
   })
 
+  # Render the monthly percent-change heatmap.
   output$monthlyGrowthPlot <- renderPlot({
     monthly_growth_result <- monthly_growth_data()
     percent_change_matrix <- monthly_growth_result$percent_change_matrix
 
+    # Stop rendering and display the helper message if the matrix is unavailable.
     validate(need(
       !is.null(percent_change_matrix),
       monthly_growth_result$message
     ))
 
+    # corrplot needs a usable color scale even when all values are equal or missing.
     percent_change_range <- range(percent_change_matrix, na.rm = TRUE)
     if (!all(is.finite(percent_change_range))) {
       percent_change_range <- c(-1, 1)
@@ -150,8 +366,10 @@ server <- function(input, output) {
       percent_change_range <- percent_change_range + c(-1, 1)
     }
 
+    # Keep the color legend readable as the number of selected states changes.
     legend_ratio <- min(1, 2 / ncol(percent_change_matrix))
 
+    # Diverging palette: red for decreases, white for near-zero, green for increases.
     percent_change_colors <- colorRampPalette(c(
       "#b2182b",
       "#ef8a62",
@@ -160,6 +378,8 @@ server <- function(input, output) {
       "#1a9850"
     ))(200)
 
+    # corrplot prints warnings for some NA layouts; suppressWarnings avoids noise
+    # while the na.label setting intentionally leaves missing cells blank.
     suppressWarnings(
       corrplot::corrplot(
         percent_change_matrix,
@@ -186,6 +406,246 @@ server <- function(input, output) {
 
     title("Average Monthly Housing Price Change (%)", line = 0.5)
   })
+
+  # Pull all available clean/malformed income plot data from the database.
+  income_visualization_data <- reactive({
+    get_income_visualization_data()
+  })
+
+  # Apply the income dataset checkboxes and zoom sliders before plotting.
+  selected_income_visualization_data <- reactive({
+    plot_data <- income_visualization_data()
+    selected_values <- input$incomeTrackedValues
+
+    # Before the dynamic UI finishes rendering, default to showing all datasets.
+    if (is.null(selected_values)) {
+      selected_values <- income_tracked_value_choices
+    }
+
+    # Keep only the datasets the user has enabled.
+    plot_data <- plot_data[plot_data$dataset %in% selected_values, ]
+
+    # Apply date zoom when the date slider exists.
+    if (!is.null(input$incomeDateZoom) && length(input$incomeDateZoom) == 2) {
+      selected_dates <- as.Date(input$incomeDateZoom, origin = "1970-01-01")
+      plot_data <- plot_data[
+        plot_data$date >= selected_dates[1] & plot_data$date <= selected_dates[2],
+      ]
+    }
+
+    # Apply value zoom when the value slider exists.
+    if (!is.null(input$incomeValueZoom) && length(input$incomeValueZoom) == 2) {
+      selected_values <- as.numeric(input$incomeValueZoom)
+      plot_data <- plot_data[
+        plot_data$zhvi >= selected_values[1] & plot_data$zhvi <= selected_values[2],
+      ]
+    }
+
+    plot_data
+  })
+
+  # Render income-specific controls after data has been read so slider ranges are known.
+  output$incomeVisualControls <- renderUI({
+    plot_data <- income_visualization_data()
+    ranges <- get_income_visualization_ranges(plot_data)
+
+    tagList(
+      div(
+        class = "well income-visual-controls",
+        fluidRow(
+          column(
+            width = 6,
+            checkboxGroupInput(
+              "incomeTrackedValues",
+              "Tracked Income Values:",
+              choices = income_tracked_value_choices,
+              selected = income_tracked_value_choices,
+              inline = TRUE
+            )
+          ),
+          column(
+            width = 3,
+            # Only show the date slider when the database returned valid dates.
+            if (!is.null(ranges$dates)) {
+              sliderInput(
+                "incomeDateZoom",
+                "Income Date Zoom:",
+                min = ranges$dates[1],
+                max = ranges$dates[2],
+                value = ranges$dates,
+                timeFormat = "%Y",
+                width = "100%"
+              )
+            }
+          ),
+          column(
+            width = 3,
+            # Only show the value slider when the database returned valid values.
+            if (!is.null(ranges$values)) {
+              sliderInput(
+                "incomeValueZoom",
+                "Income Value Zoom:",
+                min = floor(ranges$values[1]),
+                max = ceiling(ranges$values[2]),
+                value = ranges$values,
+                pre = "$",
+                sep = ",",
+                width = "100%"
+              )
+            }
+          )
+        ),
+        fluidRow(
+          column(
+            width = 12,
+            actionButton("enableAllIncomeValues", "Enable All", class = "btn-default"),
+            actionButton("disableAllIncomeValues", "Disable All", class = "btn-default"),
+            actionButton("resetIncomeZoom", "Reset Zoom", class = "btn-default")
+          )
+        )
+      )
+    )
+  })
+
+  # Enable every income dataset checkbox.
+  observeEvent(input$enableAllIncomeValues, {
+    updateCheckboxGroupInput(
+      session,
+      "incomeTrackedValues",
+      selected = income_tracked_value_choices
+    )
+  })
+
+  # Disable every income dataset checkbox.
+  observeEvent(input$disableAllIncomeValues, {
+    updateCheckboxGroupInput(session, "incomeTrackedValues", selected = character(0))
+  })
+
+  # Reset the income zoom sliders to the full available data ranges.
+  observeEvent(input$resetIncomeZoom, {
+    ranges <- get_income_visualization_ranges(income_visualization_data())
+
+    # Update each slider only when it was rendered by renderUI.
+    if (!is.null(ranges$dates)) {
+      updateSliderInput(session, "incomeDateZoom", value = ranges$dates)
+    }
+
+    if (!is.null(ranges$values)) {
+      updateSliderInput(session, "incomeValueZoom", value = ranges$values)
+    }
+  })
+
+  # Convert a mouse brush on the income line plot into date and value zoom ranges.
+  observeEvent(input$incomeLineBrush, {
+    brush <- input$incomeLineBrush
+
+    # Ignore the observer when there is no active brush selection.
+    if (is.null(brush)) {
+      return()
+    }
+
+    # Brush x-values are numeric dates, so convert them back to Date objects.
+    if (!is.null(input$incomeDateZoom)) {
+      brush_dates <- sort(as.Date(c(brush$xmin, brush$xmax), origin = "1970-01-01"))
+      if (all(!is.na(brush_dates))) {
+        updateSliderInput(session, "incomeDateZoom", value = brush_dates)
+      }
+    }
+
+    # Brush y-values map directly to the income value slider.
+    if (!is.null(input$incomeValueZoom)) {
+      brush_values <- sort(c(brush$ymin, brush$ymax))
+      if (all(is.finite(brush_values))) {
+        updateSliderInput(session, "incomeValueZoom", value = brush_values)
+      }
+    }
+  })
+
+  # Render the clean vs malformed income line chart.
+  output$incomeMalformedLinePlot <- renderPlot({
+    plot_data <- selected_income_visualization_data()
+    # Show a message when filters remove all income data.
+    validate(need(
+      nrow(plot_data) > 0,
+      "No income data found for the selected tracked values and zoom range."
+    ))
+
+    ggplot(plot_data, aes(
+      x = date,
+      y = zhvi,
+      color = dataset,
+      linetype = dataset,
+      shape = dataset,
+      group = dataset
+    )) +
+      geom_line(linewidth = 1.05, alpha = 0.95) +
+      geom_point(size = 1.9, alpha = 0.9) +
+      scale_color_manual(values = income_visual_colors) +
+      scale_linetype_manual(values = income_visual_line_types) +
+      scale_shape_manual(values = income_visual_shapes) +
+      scale_y_continuous(labels = money_labels) +
+      labs(
+        title = "Clean vs Malformed Median Income Displays",
+        x = "Date",
+        y = "Displayed Value",
+        color = "Dataset",
+        linetype = "Dataset",
+        shape = "Dataset"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "bottom",
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold")
+      )
+  })
+
+  # Render the income-value distribution histogram.
+  output$incomeMalformedHistogram <- renderPlot({
+    plot_data <- selected_income_visualization_data()
+    # Show a message when filters remove all histogram data.
+    validate(need(
+      nrow(plot_data) > 0,
+      "No income data found for the selected tracked values and zoom range."
+    ))
+
+    ggplot(plot_data, aes(x = zhvi, fill = dataset)) +
+      geom_histogram(bins = 12, alpha = 0.92, color = "#F8FAFC", linewidth = 0.35) +
+      scale_fill_manual(values = income_visual_colors) +
+      scale_x_continuous(labels = money_labels) +
+      facet_wrap(~ dataset, scales = "free_x") +
+      labs(
+        title = "Distribution of Displayed Median Income Values",
+        x = "Displayed Value",
+        y = "Count"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        legend.position = "none",
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"),
+        strip.text = element_text(face = "bold")
+      )
+  })
+
+  # Create one renderTable output for each income data source.
+  for (row_index in seq_len(nrow(income_table_sources))) {
+    local({
+      # local() captures the current loop values so every tab uses its own key.
+      source_key <- income_table_sources$key[row_index]
+      output_id <- paste0(source_key, "Table")
+
+      # get_income_table_data() handles missing or broken database views gracefully.
+      output[[output_id]] <- renderTable(
+        get_income_table_data(source_key),
+        striped = TRUE,
+        hover = TRUE,
+        bordered = TRUE,
+        spacing = "s",
+        width = "100%"
+      )
+    })
+  }
 }
 
 # Run the app

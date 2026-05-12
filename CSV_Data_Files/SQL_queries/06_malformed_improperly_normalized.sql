@@ -1,4 +1,5 @@
 -- Intentionally malformed schema variation 2: improperly normalized.
+-- Run this script while connected to final_project_housing_analysis.
 --
 -- Purpose:
 --   This version uses tables, but repeats descriptive series metadata on every
@@ -14,8 +15,8 @@
 --   source_file in every row. Repeated text can drift out of sync.
 --
 -- Prerequisite:
---   Run 01_create_income_schema.sql, 02_create_staging_tables.sql, import the
---   CSVs, then run 03_normalize_staged_income_data.sql first.
+--   Run 01_create_income_schema.sql, 02_create_and_populate_staging_tables.sql,
+--   and 03_normalize_staged_income_data.sql first.
 
 DROP SCHEMA IF EXISTS income_bad_normalization CASCADE;
 CREATE SCHEMA income_bad_normalization;

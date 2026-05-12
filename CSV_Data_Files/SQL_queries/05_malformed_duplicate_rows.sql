@@ -1,4 +1,5 @@
 -- Intentionally malformed schema variation 1: duplicate rows.
+-- Run this script while connected to final_project_housing_analysis.
 --
 -- Purpose:
 --   This version keeps a mostly reasonable table structure, but removes the
@@ -16,8 +17,8 @@
 --   repeated facts to be inserted.
 --
 -- Prerequisite:
---   Run 01_create_income_schema.sql, 02_create_staging_tables.sql, import the
---   CSVs, then run 03_normalize_staged_income_data.sql first.
+--   Run 01_create_income_schema.sql, 02_create_and_populate_staging_tables.sql,
+--   and 03_normalize_staged_income_data.sql first.
 
 DROP SCHEMA IF EXISTS income_bad_duplicates CASCADE;
 CREATE SCHEMA income_bad_duplicates;
