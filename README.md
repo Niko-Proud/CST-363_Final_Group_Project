@@ -198,4 +198,3 @@ Solution:
 ```r
 install.packages("forecast")
 ```
-- 95% confidence intervals
